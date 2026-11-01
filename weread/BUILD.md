@@ -79,7 +79,7 @@ python3 weread/official/package-public-runtime.py
 
 公共 UI 使用 1072 × 1448 逻辑画布，按 framebuffer 尺寸缩放；物理显示与输入由共用后端处理。构建目标为 ARMv7-A / VFPv3-D16 hard-float；glibc 最低 Linux 3.0.0。PW1 的 Linux 2.6.31 由安装器报告 `reader_runtime_unavailable`，不调用 Qt loader。
 
-公共 USB 包将此目录放到 `extensions/ocean/payload/runtime/`，由 KUAL 的 `installer/extension/bin/launch.sh` 启动。它保留原厂 `powerd`，账号写 `ocean/state/weread/`，离线缓存写 `weread-offline/`。手动休眠结束会话并回原厂，行为待实机验证。
+公共 USB 包将此目录放到 KPM 包的 `payload/runtime/`，由 KPM 启动钩子调用 `installer/device/bin/launch.sh`。它保留原厂 `powerd`，账号写 `ocean/state/weread/`，离线缓存写 `weread-offline/`。手动休眠结束会话并回原厂，行为待实机验证。
 
 ## 5. 旧私有包：组装本地镜像
 

@@ -10,7 +10,7 @@ import tempfile
 import time
 import unittest
 
-EXTENSION = Path(__file__).resolve().parents[1] / 'extension'
+DEVICE = Path(__file__).resolve().parents[1] / 'device'
 
 
 class DeviceTests(unittest.TestCase):
@@ -19,8 +19,8 @@ class DeviceTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.usb = self.root / 'usb'
-        self.ext = self.usb / 'extensions/ocean'
-        shutil.copytree(EXTENSION, self.ext)
+        self.ext = self.usb / 'kmc/kpm/packages/ocean'
+        shutil.copytree(DEVICE, self.ext)
         self.fake = self.root / 'bin'
         self.fake.mkdir()
         self.sys = self.root / 'sys'
@@ -215,12 +215,13 @@ while True: time.sleep(.02)
         self.assertIn(f'APP_SIGNAL {signal.SIGUSR2}', self.trace.read_text())
         self.assert_restored()
 
-    def test_device_uninstall_keeps_user_resources(self):
+    def test_device_uninstall_action_defers_to_kpm_and_keeps_user_resources(self):
         account = self.usb / 'ocean/state/weread/account'
         account.parent.mkdir(parents=True, exist_ok=True)
         account.write_text('private')
-        self.assertEqual(self.run_ocean('uninstall').returncode, 0)
-        self.assertFalse(self.ext.exists())
+        result = self.run_ocean('uninstall')
+        self.assertEqual(result.returncode, 2)
+        self.assertTrue(self.ext.exists())
         self.assertEqual(account.read_text(), 'private')
         self.assertTrue((self.usb / 'games/doom1.wad').exists())
 

@@ -1,33 +1,34 @@
 #!/usr/bin/env python3
-# input: release extension and mounted Kindle; output: USB install/status; pos: host entry.
-"""Copy the ready-made release; no SSH, compiler or device configuration needed."""
+# input: KPM package release and mounted Kindle; output: USB package/scriptlet install and status; pos: host entry.
+"""Copy the KPM package and one-tap installer; no SSH, compiler or device configuration needed."""
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import shutil
+import sqlite3
 import sys
 
-REQUIRED = (
-    'config.xml', 'menu.json', 'bin/ocean.sh', 'bin/detect.sh', 'bin/launch.sh',
-    'bin/device-probe', 'payload/runtime/ld-linux-armhf.so.3',
-    'payload/runtime/runtime-check', 'payload/runtime/weread-login',
-    'payload/runtime/ca-certificates.crt', 'payload/runtime/ReaderApp.qml',
-    'payload/runtime/fonts/NotoSansCJKsc-Regular.otf',
-    'payload/games/doom/doom-voyage', 'payload/games/doom/overlay.gray',
-    'payload/games/arcade/arcade-voyage', 'payload/games/arcade/overlay.gray',
-    'payload/games/arcade/missing.gray',
-)
-NEXT = '安全弹出 Kindle → 拔下 USB → 打开 KUAL → Ocean → 安装 / 检查'
+PACKAGE_DIR = 'kpm'
+INSTALL_SCRIPTLET = 'scriptlets/OceanKPMInstall.sh'
+UNINSTALL_SCRIPTLET = 'scriptlets/OceanKPMUninstall.sh'
+NEXT = '安全弹出 Kindle → 拔下 USB → 打开图书库中的 Ocean KPM Install → 完成后重新连接 USB'
+UNINSTALL_NEXT = '安全弹出 Kindle → 拔下 USB → 打开图书库中的 Ocean KPM Uninstall'
 
 
-def extension_source(explicit=None):
+def sha256(path):
+    with path.open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def release_source(explicit=None):
     if explicit:
         return Path(explicit).expanduser().resolve()
-    home = Path(__file__).resolve().parent
-    for release in (home / 'extensions/ocean', home.parent / 'extensions/ocean'):
-        if release.is_dir():
-            return release
-    return home / 'extension'
+    here = Path(__file__).resolve().parent
+    for candidate in (here, here.parent):
+        if (candidate / PACKAGE_DIR).is_dir():
+            return candidate
+    return here.parent
 
 
 def find_kindle(explicit=None):
@@ -47,8 +48,23 @@ def find_kindle(explicit=None):
     return found[0]
 
 
-def missing_files(extension):
-    return [name for name in REQUIRED if not (extension / name).is_file()]
+def find_package(source):
+    packages = sorted((source / PACKAGE_DIR).glob('*.kpkg'))
+    if len(packages) != 1:
+        raise ValueError(f'发行包应恰好包含一个 {PACKAGE_DIR}/*.kpkg，当前找到 {len(packages)} 个')
+    return packages[0]
+
+
+def missing_files(source):
+    missing = []
+    try:
+        find_package(source)
+    except ValueError:
+        missing.append(f'{PACKAGE_DIR}/*.kpkg')
+    for name in (INSTALL_SCRIPTLET, UNINSTALL_SCRIPTLET):
+        if not (source / name).is_file():
+            missing.append(name)
+    return missing
 
 
 def read_status(kindle):
@@ -58,64 +74,91 @@ def read_status(kindle):
     return {'phase': 'awaiting_device_check'}
 
 
+def installed_version(kindle):
+    database = kindle / 'kmc/kpm/kpm.db'
+    if not database.is_file():
+        return None
+    try:
+        connection = sqlite3.connect(f'file:{database}?mode=ro', uri=True)
+        try:
+            row = connection.execute(
+                "select version_major, version_minor, version_patch from installed_packages where id='ocean'"
+            ).fetchone()
+            return '.'.join(str(part) for part in row) if row else None
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return 'unknown'
+
+
+def copy_verified(source, target):
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+    if sha256(source) != sha256(target):
+        target.unlink(missing_ok=True)
+        raise ValueError(f'复制后校验失败：{target.name}')
+
+
 def run(command, kindle, source, progress=False):
-    target = kindle / 'extensions/ocean'
-    if command == 'install':
+    source = source.resolve()
+    if command in ('install', 'verify'):
         missing = missing_files(source)
         if missing:
             raise ValueError('发行包不完整：' + ', '.join(missing))
-        if target.is_symlink():
-            raise ValueError('extensions/ocean 是符号链接，请先选择实际 USB 根目录')
-        size = sum(p.stat().st_size for p in source.rglob('*') if p.is_file())
-        old_size = sum(p.stat().st_size for p in target.rglob('*') if p.is_file()) if target.exists() else 0
-        if size > shutil.disk_usage(kindle).free + old_size:
+    if command == 'uninstall' and not (source / UNINSTALL_SCRIPTLET).is_file():
+        raise ValueError('发行包不完整：' + UNINSTALL_SCRIPTLET)
+    package = find_package(source) if (source / PACKAGE_DIR).is_dir() else None
+    package_target = kindle / 'ocean-kpm' / package.name if package else None
+    install_script = source / INSTALL_SCRIPTLET
+    uninstall_script = source / UNINSTALL_SCRIPTLET
+
+    if command == 'install':
+        size = package.stat().st_size + install_script.stat().st_size
+        if size > shutil.disk_usage(kindle).free:
             raise ValueError(f'Kindle 空间不足：需要 {size // 1048576 + 1} MiB')
-        # Only our extension is replaced. Accounts, offline books and saves live outside it.
-        if source.resolve() != target.resolve():
-            if target.exists():
-                shutil.rmtree(target)
-            copied = 0
-            reported = -1
-
-            def copy_file(src, dst):
-                nonlocal copied, reported
-                result = shutil.copy2(src, dst)
-                copied += Path(src).stat().st_size
-                percentage = int(copied * 100 / max(size, 1))
-                if progress and (percentage // 10 != reported or copied == size):
-                    print(f'复制到 Kindle：{percentage}%', file=sys.stderr, flush=True)
-                    reported = percentage // 10
-                return result
-
-            if progress:
-                print(f'正在复制 {size // 1048576 + 1} MiB 到 {kindle}', file=sys.stderr, flush=True)
-            shutil.copytree(source, target, copy_function=copy_file)
-        for path in (target / 'bin').iterdir():
-            if path.is_file():
-                path.chmod(path.stat().st_mode | 0o111)
-        for path in (target / 'payload').rglob('*'):
-            if path.is_file() and (path.suffix == '.sh' or path.name in (
-                    'ld-linux-armhf.so.3', 'runtime-check', 'weread-login',
-                    'doom-voyage', 'arcade-voyage')):
-                path.chmod(path.stat().st_mode | 0o111)
+        package_target.parent.mkdir(parents=True, exist_ok=True)
+        for old in package_target.parent.glob('ocean_*.kpkg'):
+            if old != package_target:
+                old.unlink()
+        if progress:
+            print(f'正在复制 {size // 1048576 + 1} MiB 到 {kindle}', file=sys.stderr, flush=True)
+        copy_verified(package, package_target)
+        copy_verified(install_script, kindle / 'documents/OceanKPMInstall.sh')
         state = kindle / 'ocean/state'
         state.mkdir(parents=True, exist_ok=True)
         (state / 'status.json').write_text('{"phase":"awaiting_device_check"}\n')
-        return {'phase': 'copied', 'kindle': str(kindle), 'next': NEXT}
+        return {'phase': 'copied', 'kindle': str(kindle), 'package': package.name,
+                'sha256': sha256(package_target), 'kpmInstalledVersion': installed_version(kindle),
+                'next': NEXT}
+
     if command == 'uninstall':
-        if target.is_symlink():
-            target.unlink()
-        elif target.exists():
-            shutil.rmtree(target)
+        copy_verified(uninstall_script, kindle / 'documents/OceanKPMUninstall.sh')
         state = kindle / 'ocean/state'
         state.mkdir(parents=True, exist_ok=True)
-        (state / 'status.json').write_text('{"phase":"uninstalled","dataPreserved":true}\n')
-        return {'phase': 'uninstalled', 'preserved': ['ocean', 'games', 'weread-offline']}
-    result = {'extensionPresent': target.is_dir(), 'device': read_status(kindle)}
+        (state / 'status.json').write_text('{"phase":"uninstall_pending"}\n')
+        return {'phase': 'uninstall_pending', 'next': UNINSTALL_NEXT,
+                'preserved': ['ocean', 'games', 'weread-offline']}
+
+    result = {'kindle': str(kindle), 'device': read_status(kindle),
+              'kpmInstalledVersion': installed_version(kindle)}
     if command == 'verify':
-        result['missing'] = missing_files(target)
-        result['ok'] = not result['missing']
-        result['next'] = NEXT
+        expected = {'package': sha256(package), 'installScriptlet': sha256(install_script)}
+        actual = {}
+        missing = []
+        if not package_target.is_file():
+            missing.append(package.name)
+        else:
+            actual['package'] = sha256(package_target)
+        target_script = kindle / 'documents/OceanKPMInstall.sh'
+        if not target_script.is_file():
+            missing.append('documents/OceanKPMInstall.sh')
+        else:
+            actual['installScriptlet'] = sha256(target_script)
+        mismatched = [name for name, digest in expected.items()
+                      if name in actual and actual[name] != digest]
+        result.update({'package': package.name, 'expected': expected, 'actual': actual,
+                       'missing': missing, 'mismatched': mismatched,
+                       'ok': not missing and not mismatched, 'next': NEXT})
     return result
 
 
@@ -128,7 +171,7 @@ def main():
     parser.add_argument('--json', action='store_true')
     args = parser.parse_args()
     try:
-        result = run(args.command, find_kindle(args.kindle), extension_source(args.source), progress=True)
+        result = run(args.command, find_kindle(args.kindle), release_source(args.source), progress=True)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if not args.json and 'next' in result:
             print(result['next'])

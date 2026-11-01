@@ -1,14 +1,14 @@
 # Kindle Hack
 
-给旧 Kindle 装上微信读书、DOOM 和 Neo Geo 游戏。已经做了简单安装包，保留原厂系统，用 KUAL 菜单打开和退出。
+给旧 Kindle 装上微信读书、DOOM 和 Neo Geo 游戏。安装包保留原厂系统，通过 **KPM** 安装，用 Kindle 图书库中的官方 Scriptlet 打开和退出。
 
-**请先自行完成 Kindle 越狱并安装 KUAL。** 按[KindleModding 官方向导](https://kindlemodding.org/jailbreak-wizard.html)操作，准备好后再用安装包。
+**先按 [KindleModding 官方向导](https://kindlemodding.org/jailbreak-wizard.html)完成越狱和越狱后设置。** WinterBreak2 等现代越狱会预装 KPM；KindleModding 当前现代路径使用 KPM / Scriptlets。
 
 ## 三步安装
 
-1. Kindle 已越狱并装好 **KUAL**。还没准备好，先走 [KindleModding 官方向导](https://kindlemodding.org/jailbreak-wizard.html)。
-2. 在[最新 Release](https://github.com/OceanJy333/kindle-hack/releases/latest) 下载 `kindle-hack-ai-kit.zip`，解压，把里面的 **`extensions` 文件夹复制到 Kindle USB 根目录**。已有同名文件夹时合并。
-3. 安全弹出 Kindle、拔下 USB，打开 **KUAL → Ocean → 安装 / 检查**。检查后从同一菜单打开微信读书或游戏。
+1. Kindle 已越狱，并已具备 **KPM**。还没准备好，先走 [KindleModding 官方向导](https://kindlemodding.org/jailbreak-wizard.html)及其 “What’s Next”。
+2. 在[最新 Release](https://github.com/OceanJy333/kindle-hack/releases/latest)下载 `kindle-hack-ai-kit.zip` 和 `SHA256SUMS`，核对 SHA-256 后解压。运行发行包中的 `install.py install`，或手动把 `kpm/*.kpkg` 复制到 Kindle 的 `ocean-kpm/`，把 `scriptlets/OceanKPMInstall.sh` 复制到 `documents/`。
+3. 安全弹出 Kindle、拔下 USB，打开图书库中的 **Ocean KPM Install**。它会校验包、调用 KPM 安装、注册启动项并执行设备检查。完成后使用 **Ocean WeRead**、**Ocean DOOM** 或 **Ocean Neo Geo**。
 
 微信读书在设备上扫码登录自己的账号。DOOM 的 `doom1.wad`、Neo Geo 的 `mslug.zip` 和 `neogeo.zip` 由使用者自备，位置见[设置指南](docs/setup.md)。
 
@@ -17,12 +17,12 @@
 可以交给具备**访问本地文件、操作电脑并执行命令**能力的 AI 尝试安装，比如你自己使用的 WorkBuddy 或豆包工作。把下面这段完整发给它：
 
 ```text
-请帮我安装 https://github.com/OceanJy333/kindle-hack 的最新懒人包。
+请帮我安装 https://github.com/OceanJy333/kindle-hack 的最新 KPM 包。
 先读取仓库 docs/给AI的安装任务.md 和 AGENTS.md，严格执行其中的安装合同。
 下载最新 Release 的 kindle-hack-ai-kit.zip 与 SHA256SUMS，核对 SHA-256 后，
-自动识别已通过 USB 连接的 Kindle，安装预编译文件。不编译，不配置 SSH，
-不让我填写型号、固件或系统。需要我插拔 USB、点 KUAL 或扫码时再叫我。
-安装后回读 ocean/state/status.json，分别报告阅读器和游戏的结果。
+自动识别已通过 USB 连接的 Kindle，复制预编译 KPM 包和安装 Scriptlet。不编译，不配置 SSH，
+不让我填写型号、固件或系统。需要我插拔 USB、点 Scriptlet 或扫码时再叫我。
+安装后回读 KPM 数据库和 ocean/state/status.json，分别报告阅读器和游戏的结果。
 实测后先退出应用、回到原厂桌面，再连接 USB。
 ```
 
@@ -38,11 +38,11 @@
 
 历史 Voyage 实验有读书和游戏的实机记录。该记录与本次公共安装包的验证分开；不能据此认定所有机型、固件均已兼容。
 
-菜单包含微信读书、DOOM、Neo Geo、返回原厂桌面、查看状态和卸载。应用运行时保留原厂电源服务；按电源键休眠会退出应用，唤醒后回原厂，需要时从 KUAL 重新打开。休眠行为待实机验证。
+图书库入口包含 Ocean Check、微信读书、DOOM、Neo Geo 和返回原厂桌面。应用运行时保留原厂电源服务；按电源键休眠会退出应用，唤醒后回原厂，需要时从对应 Scriptlet 重新打开。休眠行为待实机验证。
 
 ## 源码与开发
 
-公共阅读器使用本仓库自主 QML 界面，运行包带 Qt、字体和 CA 证书，无需微信读书官方包的界面资源。账号和离线书库留在设备；卸载保留账号、书库和游戏存档。
+公共阅读器使用本仓库自主 QML 界面，运行包带 Qt、字体和 CA 证书，无需微信读书官方包的界面资源。账号和离线书库留在设备；KPM 卸载保留账号、书库和游戏存档。
 
 - [设置指南](docs/setup.md)：文件位置、验证、卸载与错误处理。
 - [Kindle Setup Skill](.agents/skills/kindle-setup/SKILL.md)：AI 执行入口。
@@ -51,6 +51,6 @@
 - `weread/`、`doom/`、`arcade/`、`games/`、`native/`：阅读、游戏和墨水屏显示。
 - `system/`：Voyage 独立 Linux 实验，开发者按[单独构建说明](system/BUILD.md)进入。
 
-旧的官方资源提取、私有镜像和独立系统构建仍保留在开发者入口。普通 USB 安装走上述三步。
+旧的官方资源提取、私有镜像和独立系统构建仍保留在开发者入口。普通安装走上述 KPM 三步。
 
 上游包括 [doomgeneric](https://github.com/ozkl/doomgeneric)、[FBA 2012 Neo Geo](https://github.com/libretro/fbalpha2012_neogeo)、[Qt](https://www.qt.io/)、[Kindle GPL 内核](https://github.com/katadelos/linux-3.0.35-lab126) 和 [barebox](https://www.barebox.org/)。各组件按其许可证使用。

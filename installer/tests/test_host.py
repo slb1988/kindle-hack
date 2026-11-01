@@ -1,4 +1,4 @@
-# input: temporary USB root and release; output: host contract tests; pos: installer tests.
+# input: temporary USB root and KPM release; output: host contract tests; pos: installer tests.
 import importlib.util
 import json
 from pathlib import Path
@@ -21,59 +21,79 @@ class HostTests(unittest.TestCase):
         self.usb = self.root / 'Kindle'
         self.source = self.root / 'source'
         self.usb.mkdir()
-        for name in installer.REQUIRED:
-            path = self.source / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text('release\n')
+        self.package = self.source / 'kpm/ocean_0.2.1_kindlepw2.kpkg'
+        self.package.parent.mkdir(parents=True)
+        self.package.write_bytes(b'kpm package fixture')
+        install = self.source / installer.INSTALL_SCRIPTLET
+        uninstall = self.source / installer.UNINSTALL_SCRIPTLET
+        install.parent.mkdir(parents=True, exist_ok=True)
+        install.write_text('#!/bin/sh\n# install fixture\n')
+        uninstall.write_text('#!/bin/sh\n# uninstall fixture\n')
 
-    def test_install_reinstall_preserve_other_extensions_and_user_data(self):
-        other = self.usb / 'extensions/koreader/keep'
+    def install(self):
+        return installer.run('install', self.usb, self.source)
+
+    def test_install_and_reinstall_preserve_user_data(self):
+        other = self.usb / 'documents/KOReader.sh'
         account = self.usb / 'ocean/state/weread/session.json'
         save = self.usb / 'games/save.dsg'
         for path in (other, account, save):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('keep')
-        self.assertEqual(installer.run('install', self.usb, self.source)['phase'], 'copied')
-        obsolete = self.usb / 'extensions/ocean/old-version'
-        obsolete.write_text('old')
-        installer.run('install', self.usb, self.source)
-        self.assertFalse(obsolete.exists())
+        stale = self.usb / 'ocean-kpm/ocean_0.2.0_kindlepw2.kpkg'
+        stale.parent.mkdir(parents=True)
+        stale.write_text('old')
+        result = self.install()
+        self.assertEqual(result['phase'], 'copied')
+        self.assertFalse(stale.exists())
         self.assertTrue(installer.run('verify', self.usb, self.source)['ok'])
         self.assertEqual(installer.read_status(self.usb)['phase'], 'awaiting_device_check')
-        installer.run('uninstall', self.usb, self.source)
-        self.assertFalse((self.usb / 'extensions/ocean').exists())
+        self.install()
         for path in (other, account, save):
             self.assertEqual(path.read_text(), 'keep')
-        self.assertEqual(installer.read_status(self.usb)['phase'], 'uninstalled')
 
     def test_incomplete_release_does_not_replace_existing_install(self):
-        installer.run('install', self.usb, self.source)
-        (self.source / 'bin/device-probe').unlink()
+        self.install()
+        self.package.unlink()
         with self.assertRaisesRegex(ValueError, '发行包不完整'):
-            installer.run('install', self.usb, self.source)
-        self.assertTrue((self.usb / 'extensions/ocean/bin/device-probe').exists())
+            self.install()
+        self.assertTrue((self.usb / 'ocean-kpm/ocean_0.2.1_kindlepw2.kpkg').exists())
 
-    def test_verify_reports_missing_payload(self):
+    def test_verify_reports_missing_and_mismatch(self):
         result = installer.run('verify', self.usb, self.source)
         self.assertFalse(result['ok'])
-        self.assertIn('bin/device-probe', result['missing'])
+        self.assertIn('ocean_0.2.1_kindlepw2.kpkg', result['missing'])
+        self.install()
+        script = self.usb / 'documents/OceanKPMInstall.sh'
+        script.write_text('corrupt')
+        result = installer.run('verify', self.usb, self.source)
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['mismatched'], ['installScriptlet'])
 
     def test_low_space_is_reported_before_mutation(self):
         with patch.object(installer.shutil, 'disk_usage', return_value=SimpleNamespace(free=0)):
             with self.assertRaisesRegex(ValueError, '空间不足'):
-                installer.run('install', self.usb, self.source)
-        self.assertFalse((self.usb / 'extensions/ocean').exists())
+                self.install()
+        self.assertFalse((self.usb / 'ocean-kpm/ocean_0.2.1_kindlepw2.kpkg').exists())
 
-    def test_installer_can_check_release_already_on_usb(self):
-        installer.run('install', self.usb, self.source)
-        target = self.usb / 'extensions/ocean'
-        installer.run('install', self.usb, target)
-        self.assertTrue(installer.run('verify', self.usb, target)['ok'])
+    def test_uninstall_copies_kpm_scriptlet_and_preserves_data(self):
+        self.install()
+        package = self.usb / 'ocean-kpm/ocean_0.2.1_kindlepw2.kpkg'
+        account = self.usb / 'ocean/state/weread/session.json'
+        account.parent.mkdir(parents=True, exist_ok=True)
+        account.write_text('keep')
+        result = installer.run('uninstall', self.usb, self.source)
+        self.assertEqual(result['phase'], 'uninstall_pending')
+        self.assertTrue((self.usb / 'documents/OceanKPMUninstall.sh').exists())
+        self.assertTrue(package.exists())
+        self.assertEqual(account.read_text(), 'keep')
+        self.assertEqual(installer.read_status(self.usb)['phase'], 'uninstall_pending')
 
     def test_explicit_usb_path_and_json_status(self):
         self.assertEqual(installer.find_kindle(str(self.usb)), self.usb.resolve())
         result = installer.run('status', self.usb, self.source)
         self.assertEqual(json.loads(json.dumps(result))['device']['phase'], 'awaiting_device_check')
+        self.assertIn('kpmInstalledVersion', result)
         with self.assertRaises(ValueError):
             installer.find_kindle(str(self.root / 'missing'))
 

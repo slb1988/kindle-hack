@@ -9,16 +9,16 @@
 需要 Node.js 24+、Python 3.12+、make、C/C++ 工具和已运行的 Docker。一条命令下载固定依赖、编译游戏与阅读器、执行安装器测试并打包：
 
 ```sh
-sh tools/build-release.sh --version v0.2.0-ai-kit
+sh tools/build-release.sh --version v0.2.1-ai-kit
 ```
 
-输出 `build/release/kindle-hack-ai-kit.zip`、`kindle-hack-sources.tar.gz` 和 `SHA256SUMS`。已有完整构建产物时，可只组装发行文件：
+输出 `build/release/kindle-hack-ai-kit.zip`、`ocean_<版本>_kindlepw2.kpkg`、`kindle-hack-sources.tar.gz` 和 `SHA256SUMS`。已有完整构建产物时，可只组装发行文件：
 
 ```sh
-python3 tools/package-release.py --version v0.2.0-ai-kit
+python3 tools/package-release.py --version v0.2.1-ai-kit
 ```
 
-发布为普通 GitHub Release，标签 `v0.2.0-ai-kit`；安装任务通过 `/releases/latest` 取得发行资产。
+发布为普通 GitHub Release，标签 `v0.2.1-ai-kit`；安装任务通过 `/releases/latest` 取得发行资产。
 
 ## 主机与游戏
 
@@ -63,13 +63,13 @@ python3 weread/official/package-public-runtime.py
 
 输出 `build/weread/native-runtime/public-runtime/`。公共包使用自主 QML、Noto 字体和 CA 证书，无需官方客户端的 QML、图标或安装包。Qt 当前最低 Linux 3.0.0；PW1 的 Linux 2.6.31 不能运行该阅读器。
 
-`installer/` 提供 USB 安装器、KUAL 扩展和设备探针。发行包应包含根目录 `install.py`、`extensions/ocean/` 和完整的预编译 payload；游戏 WAD、ROM、BIOS 由用户自备。固定命令与结果状态见[给 AI 的安装任务](docs/给AI的安装任务.md)。
+`installer/` 提供 KPM 包结构、官方 Scriptlet 启动项、USB 复制器和设备探针。发行包应包含根目录 `install.py`、`kpm/*.kpkg`、`scriptlets/OceanKPMInstall.sh` 和完整的预编译 payload；游戏 WAD、ROM、BIOS 由用户自备。固定命令与结果状态见[给 AI 的安装任务](docs/给AI的安装任务.md)。
 
 ## 旧私有运行包与独立系统
 
 [weread/BUILD.md](weread/BUILD.md) 保留从用户自备官方包提取资源的私有镜像构建。这些资源留在本地 `build/`。独立内核与根文件系统按 [system/BUILD.md](system/BUILD.md) 单独构建，需要用户设备的硬件固件。
 
-`native/device-start.sh`、`native/physical-desktop.sh` 和旧 ext2 镜像属于 Voyage 实验入口，包含旧电源交接；普通 USB 安装使用 `installer/extension/bin/launch.sh`，保留原厂 `powerd`。
+`native/device-start.sh`、`native/physical-desktop.sh` 和旧 ext2 镜像属于 Voyage 实验入口，包含旧电源交接；普通 USB 安装使用 `installer/device/bin/launch.sh`，保留原厂 `powerd`。
 
 ## 验证范围
 

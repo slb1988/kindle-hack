@@ -1,5 +1,5 @@
 #!/bin/sh
-# input: KUAL action and release payload; output: selected components/status; pos: device entry.
+# input: launcher action and release payload; output: selected components/status; pos: device entry.
 set -eu
 usb=${OCEAN_USB_ROOT:-/mnt/us}
 ext=${OCEAN_EXTENSION_ROOT:-$(CDPATH='' cd "$(dirname "$0")/.." && pwd)}
@@ -84,7 +84,7 @@ check() {
  next=read_probe_logs
  case "$hardware" in unsupported_*) next=report_device_json;; ready)
   case "$reader:$doom:$neogeo" in
-   *ready*) next=open_kual_app;;
+   *ready*) next=open_scriptlet_app;;
    *missing_doom*|*missing_mslug*) next=copy_game_data_then_check;;
    *payload_missing*) next=reinstall_release;;
   esac;;
@@ -107,9 +107,6 @@ case "${1:-install}" in
  weread|doom|neogeo) exec "$ext/bin/launch.sh" "$1";;
  stock) exec "$ext/bin/launch.sh" stock;;
  uninstall)
-  "$ext/bin/launch.sh" stock
-  printf '{"phase":"uninstalled","dataPreserved":true}\n' > "$state/status.json"
-  rm -rf "$ext"
-  notify "Ocean removed. Accounts and saves kept.";;
- *) printf 'Usage: ocean.sh install|verify|status|weread|doom|neogeo|stock|uninstall\n'; exit 2;;
+  printf 'Use KPM to uninstall the Ocean package; user data is preserved.\n' >&2; exit 2;;
+ *) printf 'Usage: ocean.sh install|verify|status|weread|doom|neogeo|stock\n'; exit 2;;
 esac

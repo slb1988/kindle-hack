@@ -16,7 +16,7 @@
 
 获取入口是 `python3 tools/fetch-deps.py`；依赖 URL 与 SHA-256 记录在 [dependencies.json](tools/dependencies.json)。系统与 Qt 依赖使用各自的构建入口。
 
-公共阅读器使用作者编写的 Qt/QML 界面。`package-public-runtime.py` 组装公共运行目录，不需要微信读书官方安装包、QML、图标或提取资源。发行包中的 Qt、glibc、OpenSSL 及其依赖以动态库形式提供，可在 `extensions/ocean/payload/runtime/` 替换。运行目录的 `licenses/debian/` 保留所用 Debian 包的 copyright / 许可声明；对应依赖来源、固定版本和重建方法见 [weread/BUILD.md](weread/BUILD.md)，Release 同时提供 `kindle-hack-sources.tar.gz` 源码附件。
+公共阅读器使用作者编写的 Qt/QML 界面。`package-public-runtime.py` 组装公共运行目录，不需要微信读书官方安装包、QML、图标或提取资源。发行包中的 Qt、glibc、OpenSSL 及其依赖以动态库形式封装在 KPM 包的 `payload/runtime/` 中，可按固定构建流程替换。运行目录的 `licenses/debian/` 保留所用 Debian 包的 copyright / 许可声明；对应依赖来源、固定版本和重建方法见 [weread/BUILD.md](weread/BUILD.md)，Release 同时提供 `kindle-hack-sources.tar.gz` 源码附件。
 
 旧私有阅读器和独立系统实验保留官方资源提取及补丁工具。该路线的 Amazon 固件、微信读书官方安装包及提取资源由使用者自行提供，提取产物留在本地 `build/`。`patch_qml.py` 仅用于这条私有构建路线。
 
