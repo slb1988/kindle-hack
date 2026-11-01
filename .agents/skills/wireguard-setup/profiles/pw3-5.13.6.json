@@ -1,0 +1,34 @@
+{
+  "id": "pw3-5.13.6",
+  "model": "Paperwhite 3",
+  "firmware": "5.13.6 (373199 038)",
+  "kernelRelease": "3.0.35-lab126",
+  "architecture": "armv7l",
+  "kernelVersionSha256": "d7ea2ab48e56b27c5e7f53488d140ea58bc242463b33d2605092a18b5e674918",
+  "kernelConfigSha256": "a305846a0ea0621f864f3f1d50e87fc95fb2c5b37886cc4a19b94a12711bbca8",
+  "vermagic": "3.0.35-lab126 preempt mod_unload ARMv7 p2v8 ",
+  "source": {
+    "url": "https://kindledownloads.s3.amazonaws.com/Kindle_src_5.13.6_3731990038.tar.gz",
+    "sha256": "4a01245d1bf8724da428dd044bd0e2f6cae0687446b3a2c909dc21a7acc2222f",
+    "bytes": 332761879,
+    "uploadMd5": "475a3b4f3af806c51693752e0e3ab8c0",
+    "kernelMember": "gplrelease/linux-3.0.35.tar.gz"
+  },
+  "release": {
+    "repository": "PinguIntel/kindle-wireguard",
+    "tag": "v0.2.0",
+    "zipName": "kwg.koplugin.zip",
+    "zipSha256": "fc759e7cc8b6f608f7cd92b3fd0b3b739bbb99660090e71e2740d6324225eac3",
+    "binarySha256": "9167c55f126cd6b74dbe3184b22a59fe1dc90c829754d0d5d0cf6eb731a6dee3"
+  },
+  "validation": {
+    "nativeBinaryHelp": "passed_on_device",
+    "tunModuleAndIoctls": "passed_on_device",
+    "wireguardHandshake": "passed_on_device",
+    "peerPing": "2/2_on_device",
+    "serviceMockTests": 15,
+    "bootAutostart": "pending_device_report",
+    "sshSftp": "not_configured",
+    "goOfficialKernelSupport": false
+  }
+}

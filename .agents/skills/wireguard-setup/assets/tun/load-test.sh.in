@@ -1,0 +1,102 @@
+#!/bin/sh
+# Temporary TUN module load/test. Never flash a kernel, force-load a module,
+# modify the root filesystem, change routes/DNS, or install autostart.
+set -u
+umask 077
+ulimit -c 0 2>/dev/null || :
+BASE=/mnt/us/kwg-tun
+STATE="$BASE/state"
+MOD="$BASE/tun.ko"
+PROBE="$BASE/tun-probe"
+mkdir -p "$STATE" || exit 1
+exec > "$STATE/test.log" 2>&1
+result=initializing
+loaded_here=false
+already_loaded=false
+created_node=false
+module_loaded=false
+probe_ok=false
+probe_rc=125
+
+module_present() { grep -q '^tun ' /proc/modules; }
+hash_is() {
+    actual=$(sha256sum "$1") || return 1
+    [ "${actual%% *}" = "$2" ]
+}
+write_status() {
+    module_loaded=false
+    if module_present; then module_loaded=true; fi
+    printf '{"phase":"temporary_module_test","result":"%s","moduleLoaded":%s,"moduleLoadedByThisTest":%s,"moduleAlreadyLoaded":%s,"tunIoctlsPassed":%s,"probeExitCode":%s,"createdDeviceNode":%s,"kernelFlashed":false,"rootFilesystemChanged":false,"vpnStarted":false,"autostartInstalled":false}\n' \
+        "$result" "$module_loaded" "$loaded_here" "$already_loaded" "$probe_ok" "$probe_rc" "$created_node" > "$STATE/status.json.tmp"
+    mv "$STATE/status.json.tmp" "$STATE/status.json"
+}
+kernel_log() {
+    dmesg | grep -E -i '(^|[^a-z])tun([^a-z]|$)|unknown symbol|version magic|disagrees about version|module verification|kernel BUG|Oops:' | tail -n 60 > "$STATE/kernel.log" 2>/dev/null || :
+}
+fail() {
+    result="$1"
+    printf 'FAIL: %s\n' "$result"
+    kernel_log
+    # Only unload a module that this test loaded. Never force removal.
+    if [ "$loaded_here" = true ] && [ "$probe_ok" = false ]; then
+        /sbin/rmmod tun >> "$STATE/unload.log" 2>&1 || :
+    fi
+    if [ "$created_node" = true ] && ! module_present; then
+        rm -f /dev/net/tun
+        created_node=false
+    fi
+    write_status
+    sync
+    exit 1
+}
+trap 'fail interrupted' HUP INT TERM
+printf 'Temporary TUN module test for PW3 / 5.13.6 (373199 038)\n'
+date -u
+write_status
+[ "$(id -u)" -eq 0 ] || fail root_required
+[ "$(uname -r)" = 3.0.35-lab126 ] || fail kernel_release_mismatch
+[ "$(uname -m)" = armv7l ] || fail architecture_mismatch
+hash_is /proc/version @@KERNEL_VERSION_SHA256@@ || fail kernel_build_mismatch
+gzip -dc /proc/config.gz > "$STATE/running-kernel.config" || fail kernel_config_unreadable
+hash_is "$STATE/running-kernel.config" @@KERNEL_CONFIG_SHA256@@ || fail kernel_config_mismatch
+hash_is "$MOD" @@TUN_MODULE_SHA256@@ || fail module_hash_mismatch
+hash_is "$PROBE" @@TUN_PROBE_SHA256@@ || fail probe_hash_mismatch
+modules_disabled=unknown
+IFS= read -r modules_disabled < /proc/sys/kernel/modules_disabled || :
+[ "$modules_disabled" = 0 ] || fail module_loading_disabled
+/sbin/modinfo "$MOD" > "$STATE/module-info.txt" 2>&1 || fail module_metadata_unreadable
+grep -q '^vermagic:[[:space:]]*3[.]0[.]35-lab126 preempt mod_unload ARMv7 p2v8[[:space:]]*$' "$STATE/module-info.txt" || fail module_vermagic_mismatch
+# Check that the statically linked helper starts before touching kernel state.
+"$PROBE" --help > "$STATE/probe-help.log" 2>&1 || fail probe_runtime_failed
+if module_present; then
+    already_loaded=true
+else
+    result=loading_module
+    write_status
+    sync
+    /sbin/insmod "$MOD" > "$STATE/insmod.log" 2>&1 || fail module_load_failed
+    loaded_here=true
+fi
+module_present || fail module_not_registered
+if ! grep -Eq '(^|[[:space:]])tun$' /proc/misc; then fail tun_driver_not_registered; fi
+if [ ! -e /dev/net/tun ]; then
+    mkdir -p /dev/net || fail device_directory_failed
+    mknod /dev/net/tun c 10 200 || fail device_node_creation_failed
+    created_node=true
+    chmod 600 /dev/net/tun || fail device_node_permissions_failed
+fi
+[ -c /dev/net/tun ] || fail unexpected_device_node
+result=testing_tun_interface
+write_status
+sync
+# The helper creates an unaddressed, nonpersistent interface, tests the ioctls
+# used by wireguard-go, then closes the descriptor and verifies removal.
+"$PROBE" --verify > "$STATE/probe.json" 2> "$STATE/probe-error.log"
+probe_rc=$?
+[ "$probe_rc" -eq 0 ] || fail tun_ioctl_probe_failed
+probe_ok=true
+kernel_log
+result=ready_temporary
+write_status
+printf 'PASS: module loaded and TUN ioctls passed. No VPN or autostart.\n'
+sync

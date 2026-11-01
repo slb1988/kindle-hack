@@ -46,6 +46,7 @@
 
 - [设置指南](docs/setup.md)：文件位置、验证、卸载与错误处理。
 - [Kindle Setup Skill](.agents/skills/kindle-setup/SKILL.md)：AI 执行入口。
+- [WireGuard Setup Skill](.agents/skills/wireguard-setup/SKILL.md)：独立的 Kindle VPN/TUN 安装、手动控制与自启动流程，包含 PW3 实测记录、复现脚本和重启验证要求。
 - [BUILD.md](BUILD.md)：源码构建及 Release 打包。
 - [本轮验证](docs/release-validation.md)：本地检查与待完成的设备实测。
 - `weread/`、`doom/`、`arcade/`、`games/`、`native/`：阅读、游戏和墨水屏显示。

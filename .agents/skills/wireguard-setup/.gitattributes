@@ -1,0 +1,8 @@
+# Device scripts and the exact, tested unified diff must keep LF bytes.
+*.sh text eol=lf
+*.sh.in text eol=lf
+*.py text eol=lf
+Makefile text eol=lf
+assets/service/kwg.upstart text eol=lf
+# Context-prefix spaces/tabs are patch syntax, not source formatting errors.
+assets/tun/source-compat.patch text eol=lf -whitespace

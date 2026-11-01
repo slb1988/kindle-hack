@@ -1,0 +1,8 @@
+# kwg: WireGuard tunnel watchdog — managed by the KOReader kwg plugin
+start on framework_ready
+stop on stopping framework
+respawn
+pre-start script
+  if [ -n "$UPSTART_EVENTS" ] && [ ! -f /var/local/kwg/autostart ]; then stop; exit 0; fi
+end script
+exec /bin/sh '/mnt/us/koreader/plugins/kwg.koplugin/kwg-loop.sh' '/var/local/kwg/wg.conf' '/var/local/kwg/kwg.log'

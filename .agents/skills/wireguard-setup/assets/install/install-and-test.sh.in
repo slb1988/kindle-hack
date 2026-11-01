@@ -1,0 +1,186 @@
+#!/bin/sh
+# Import an explicitly supplied client config and test a split tunnel briefly.
+# No boot job, permanent daemon, DNS changes, or private-key output.
+set -u
+umask 077
+ulimit -c 0 2>/dev/null || :
+BASE=/mnt/us/kwg-install
+OUT="$BASE/state"
+PLUGIN=/mnt/us/koreader/plugins/kwg.koplugin
+BIN="$PLUGIN/kwg.bin"
+SECURE=/var/local/kwg
+CONF="$SECURE/wg.conf"
+INCOMING="$BASE/client.conf"
+LOCK=/tmp/kwg-install-test.lock
+EXPECTED_CONF=@@CONFIG_SHA256@@
+if ! mkdir "$LOCK" 2>/dev/null; then
+    printf 'Another WireGuard install/test is running. Wait for it to finish.\n'
+    exit 1
+fi
+mkdir -p "$OUT" || { rmdir "$LOCK"; exit 1; }
+exec > "$OUT/install.log" 2>&1
+result=initializing
+config_imported=false
+usb_config_removed=false
+attempted=false
+tunnel_started=false
+handshake=false
+ping_result=not_tested
+cleanup_ok=true
+PID=
+TESTCONF=
+
+hash_is() {
+    value=$(sha256sum "$1") || return 1
+    [ "${value%% *}" = "$2" ]
+}
+our_process_alive() {
+    [ -n "$PID" ] || return 1
+    kill -0 "$PID" 2>/dev/null || return 1
+    executable=$(readlink "/proc/$PID/exe" 2>/dev/null) || return 1
+    [ "$executable" = "$BIN" ] || [ "$executable" = "$BIN (deleted)" ]
+}
+write_status() {
+    interface_present=false
+    [ ! -d /sys/class/net/wg0 ] || interface_present=true
+    printf '{"release":"v0.2.0","result":"%s","configImported":%s,"usbConfigRemoved":%s,"tunnelStartAttempted":%s,"tunnelStarted":%s,"handshakeVerified":%s,"macPing":"%s","testCleanupSucceeded":%s,"wg0PresentNow":%s,"dnsModifiedByTest":false,"autostartInstalledByInstaller":false,"vpnAddress":"@@VPN_ADDRESS@@","allowedSubnet":"@@VPN_SUBNET@@","macVpnAddress":"@@TEST_PEER_IP@@"}\n' \
+        "$result" "$config_imported" "$usb_config_removed" "$attempted" "$tunnel_started" "$handshake" "$ping_result" "$cleanup_ok" "$interface_present" > "$OUT/status.json.tmp"
+    mv "$OUT/status.json.tmp" "$OUT/status.json"
+}
+cleanup() {
+    if [ -n "$PID" ]; then
+        if our_process_alive; then
+            kill -TERM "$PID" 2>/dev/null || :
+            n=0
+            while our_process_alive && [ "$n" -lt 8 ]; do sleep 1; n=$((n + 1)); done
+            if our_process_alive; then
+                kill -KILL "$PID" 2>/dev/null || :
+                sleep 1
+            fi
+        fi
+        if our_process_alive; then
+            cleanup_ok=false
+        else
+            wait "$PID" 2>/dev/null || :
+        fi
+    fi
+    if [ "$attempted" = true ] && [ -d /sys/class/net/wg0 ]; then
+        cleanup_ok=false
+        # Do not delete an interface or force-unload a driver here.
+    fi
+    [ -z "$TESTCONF" ] || rm -f "$TESTCONF"
+    if [ "$cleanup_ok" != true ]; then result=test_cleanup_incomplete; fi
+    write_status
+    rmdir "$LOCK" 2>/dev/null || :
+    sync
+    if [ "$cleanup_ok" != true ]; then
+        trap - 0
+        exit 1
+    fi
+}
+finish() { result="$1"; printf 'Result: %s\n' "$result"; exit "$2"; }
+trap 'cleanup' 0
+trap 'finish interrupted 1' HUP INT TERM
+printf 'WireGuard install + bounded split-tunnel test\n'
+date -u
+write_status
+[ "$(id -u)" -eq 0 ] || finish root_required 1
+[ "$(uname -r)" = 3.0.35-lab126 ] || finish unexpected_kernel 1
+[ "$(uname -m)" = armv7l ] || finish unexpected_architecture 1
+if status kwg 2>/dev/null | grep -q '^kwg start/'; then
+    finish managed_service_running_use_wireguard_status 1
+fi
+[ ! -d /sys/class/net/wg0 ] || finish existing_tunnel_not_touched 1
+[ ! -S /var/run/wireguard/wg0.sock ] || finish existing_control_socket_not_touched 1
+(cd /mnt/us && sha256sum -c "$BASE/payload.sha256") > "$OUT/payload-verification.log" 2>&1 || finish payload_verification_failed 1
+mkdir -p "$SECURE" || finish secure_storage_unavailable 1
+chmod 700 "$SECURE" || finish secure_permissions_failed 1
+if [ -f "$INCOMING" ]; then
+    hash_is "$INCOMING" "$EXPECTED_CONF" || finish incoming_config_hash_mismatch 1
+    "$BIN" check "$INCOMING" > "$OUT/config-check.log" 2>&1 || finish invalid_client_config 1
+    if [ -f "$CONF" ] && ! cmp -s "$CONF" "$INCOMING"; then
+        backup="$CONF.before-install.$(date +%s).$$"
+        [ ! -e "$backup" ] || finish backup_path_exists 1
+        cp "$CONF" "$backup" && chmod 600 "$backup" || finish config_backup_failed 1
+    fi
+    temporary="$SECURE/import.$$.conf"
+    cp "$INCOMING" "$temporary" && chmod 600 "$temporary" || finish config_copy_failed 1
+    hash_is "$temporary" "$EXPECTED_CONF" || finish config_copy_verification_failed 1
+    mv "$temporary" "$CONF" || finish config_import_failed 1
+    hash_is "$CONF" "$EXPECTED_CONF" || finish installed_config_hash_mismatch 1
+    config_imported=true
+    rm -f "$INCOMING" || finish usb_config_removal_failed 1
+    usb_config_removed=true
+elif [ -f "$CONF" ] && hash_is "$CONF" "$EXPECTED_CONF"; then
+    config_imported=true
+    usb_config_removed=true
+else
+    finish client_config_not_available 1
+fi
+chmod 600 "$CONF" || finish secure_config_permissions_failed 1
+result=config_imported
+write_status
+sync
+if ! { [ -c /dev/net/tun ] && grep -Eq '(^|[[:space:]])tun$' /proc/misc; }; then
+    /bin/sh /mnt/us/kwg-tun/load-test.sh || finish tun_setup_failed 1
+fi
+ip route show > "$OUT/routes-before.txt" 2>&1 || finish route_inspection_failed 1
+grep -q '^default ' "$OUT/routes-before.txt" || finish wifi_ipv4_route_missing 1
+if grep -Eq '^@@VPN_SUBNET_REGEX@@([[:space:]]|$)' "$OUT/routes-before.txt"; then
+    finish vpn_subnet_conflicts_with_existing_route 1
+fi
+# Preserve the supplied config exactly. The temporary test copy omits DNS and
+# uses a 5-second keepalive only to initiate a handshake promptly.
+TESTCONF="$SECURE/test.$$.conf"
+awk '
+BEGIN { section="" }
+{
+    line=tolower($0)
+    if (line ~ /^[[:space:]]*\[interface\]/) { section="interface"; print; next }
+    if (line ~ /^[[:space:]]*\[peer\]/) { section="peer"; print; print "PersistentKeepalive = 5"; next }
+    if (section=="interface" && line ~ /^[[:space:]]*dns[[:space:]]*=/) next
+    if (section=="peer" && line ~ /^[[:space:]]*persistentkeepalive[[:space:]]*=/) next
+    print
+}' "$CONF" > "$TESTCONF" || finish test_config_creation_failed 1
+chmod 600 "$TESTCONF" || finish test_config_permissions_failed 1
+"$BIN" check "$TESTCONF" > "$OUT/test-config-check.log" 2>&1 || finish invalid_test_config 1
+result=testing_handshake
+attempted=true
+write_status
+"$BIN" up "$TESTCONF" > "$OUT/tunnel.log" 2>&1 &
+PID=$!
+sleep 1
+n=0
+while [ "$n" -lt 30 ]; do
+    our_process_alive || break
+    if [ -d /sys/class/net/wg0 ]; then tunnel_started=true; fi
+    "$BIN" status > "$OUT/tunnel-status.txt" 2>&1 || :
+    if grep -q '^handshake: ' "$OUT/tunnel-status.txt" && ! grep -q '^handshake: never$' "$OUT/tunnel-status.txt"; then
+        handshake=true
+        break
+    fi
+    sleep 2
+    n=$((n + 1))
+done
+if [ "$tunnel_started" = true ]; then
+    ip addr show dev wg0 > "$OUT/wg0-address.txt" 2>&1 || :
+    ip route show dev wg0 > "$OUT/wg0-routes.txt" 2>&1 || :
+fi
+if [ "$handshake" = true ]; then
+    if [ -z '@@TEST_PEER_IP@@' ]; then
+        ping_result=not_requested
+    elif command -v ping >/dev/null 2>&1; then
+        if ping -c 2 -W 3 @@TEST_PEER_IP@@ > "$OUT/mac-ping.log" 2>&1; then ping_result=passed; else ping_result=no_reply; fi
+    else
+        ping_result=ping_unavailable
+    fi
+    "$BIN" status > "$OUT/tunnel-status.txt" 2>&1 || :
+    if command -v netstat >/dev/null 2>&1; then
+        netstat -lnt 2>/dev/null | grep -E ':(22|2222)[[:space:]]' > "$OUT/ssh-listeners.txt" || :
+    fi
+    finish handshake_verified_test_stopped 0
+elif [ "$tunnel_started" = true ]; then
+    finish tunnel_created_no_handshake 1
+else
+    finish tunnel_start_failed 1
+fi

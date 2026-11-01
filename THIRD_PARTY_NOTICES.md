@@ -11,6 +11,8 @@
 | zlib | 1.3.1，zlib.net 官方源码包 | zlib License。 |
 | npm 依赖 | `native/package-lock.json` 固定版本和完整性校验 | `@resvg/resvg-js`（MPL-2.0）；`fontkit`、`fast-xml-parser`（MIT）；间接依赖许可见各包。 |
 | Linux / ARM kexec | `system/` 构建脚本固定的上游源码 | GNU GPL v2；`system/kexec/` 包含 Linux 派生实现。 |
+| Kindle WireGuard / wireguard-go | `PinguIntel/kindle-wireguard` v0.2.0；版本和 SHA 固定在 `.agents/skills/wireguard-setup/profiles/` | 上游 MIT；许可保留于该 Skill 的 `licenses/kindle-wireguard-MIT.txt`。预编译包仅下载到 `build/`，不提交二进制。 |
+| Kindle TUN 内核兼容补丁 | Amazon `Kindle_src_5.13.6_3731990038.tar.gz`；URL/SHA 与复现步骤见 WireGuard Skill | 内核派生补丁按 GPL v2，保留 `licenses/Linux-COPYING.txt`。只提交小补丁和构建脚本，内核源码大包、设备快照及 `.ko` 留在忽略目录。 |
 | Qt 6 / glibc / OpenSSL / libqrencode | `weread/BUILD.md` 的 Debian snapshot 与源码构建 | Qt 开源模块按 LGPL v3 / GPL v3 等模块许可；glibc LGPL v2.1+；OpenSSL 3 Apache-2.0；libqrencode LGPL v2.1+。原文随源码/包提供。 |
 | BusyBox / Dropbear / wpa_supplicant | `system/BUILD.md` 与获取脚本 | BusyBox GPL v2；Dropbear MIT 风格多条款；wpa_supplicant BSD。保留各源码包许可。 |
 

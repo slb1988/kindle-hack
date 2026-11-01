@@ -1,5 +1,7 @@
 # Kindle Hack：给 AI 的入口
 
+用户明确要求 Kindle WireGuard、VPN、TUN 或 VPN 自启动时，使用 [.agents/skills/wireguard-setup/SKILL.md](.agents/skills/wireguard-setup/SKILL.md)，不要误跑下面的 Ocean 安装器。先只读探测；只有明确授权补装/开发 TUN 后才构建模块。内核刷写不在该 Skill 范围内。
+
 用户说“帮我安装、设置 Kindle”时，执行 [docs/给AI的安装任务.md](docs/给AI的安装任务.md)，并读 [.agents/skills/kindle-setup/SKILL.md](.agents/skills/kindle-setup/SKILL.md)。默认安装最新 Release 的预编译 KPM 包：校验 → 复制 `.kpkg` 与 `OceanKPMInstall.sh` → 用户点 Scriptlet → 回读 KPM 和设备状态。
 
 自动识别 USB 路径；设备侧探针识别型号、固件和能力。不要先让用户填写型号、固件、电脑系统。只向用户请求插拔 USB、点 Scriptlet 和扫码等实体操作。没有本地文件和命令能力时，明确交给用户三步安装说明。

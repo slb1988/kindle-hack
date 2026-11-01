@@ -1,0 +1,259 @@
+#!/bin/sh
+# Scriptlet controller for the SAME kwg Upstart job used by the KOReader plugin.
+# State output never includes config contents, private keys, or account data.
+set -u
+umask 077
+PUBLIC=/mnt/us/kwg-service
+STATE=/var/local/kwg
+PLUGIN=/mnt/us/koreader/plugins/kwg.koplugin
+BIN="$PLUGIN/kwg.bin"
+CONF="$STATE/wg.conf"
+AUTO="$STATE/autostart"
+JOB=/etc/upstart/kwg.conf
+EXPECTED_JOB="$PUBLIC/kwg.upstart"
+LOCK=/tmp/kwg-control.lock
+HAVE_LOCK=false
+RESTORE_RO=false
+NATIVE_TRUST=unknown
+mkdir -p "$STATE" || exit 1
+chmod 700 "$STATE" || exit 1
+LOG="$STATE/control.log"
+
+log() { printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$1" >> "$LOG"; }
+cleanup() {
+    failed=false
+    if [ "$RESTORE_RO" = true ]; then
+        if ! mntroot ro >> "$LOG" 2>&1; then
+            printf 'ERROR: unable to restore root filesystem read-only.\n'
+            printf '%s\n' 'Root filesystem read-only restore failed.' > "$STATE/control-error.txt"
+            failed=true
+        fi
+    fi
+    if [ "$HAVE_LOCK" = true ]; then rmdir "$LOCK" 2>/dev/null || :; fi
+    if [ "$failed" = true ]; then show_status || :; trap - 0; exit 1; fi
+}
+trap 'cleanup' 0
+trap 'exit 130' HUP INT TERM
+fail() {
+    printf 'ERROR: %s\n' "$1"
+    log "error: $1"
+    printf '%s\n' "$1" > "$STATE/control-error.txt"
+    show_status || :
+    exit 1
+}
+lock() {
+    [ "$(id -u)" -eq 0 ] || fail 'Root access is required.'
+    mkdir "$LOCK" 2>/dev/null || fail 'Another WireGuard control action is running.'
+    HAVE_LOCK=true
+    rm -f "$STATE/control-error.txt"
+}
+read_token() { if [ -r "$1" ]; then tr -cd "$2" < "$1"; fi; }
+native_trusted() {
+    if [ "$NATIVE_TRUST" = unknown ]; then
+        digest=$(sha256sum "$BIN" 2>/dev/null) || digest=
+        NATIVE_TRUST=false
+        [ "${digest%% *}" != 9167c55f126cd6b74dbe3184b22a59fe1dc90c829754d0d5d0cf6eb731a6dee3 ] || NATIVE_TRUST=true
+    fi
+    [ "$NATIVE_TRUST" = true ]
+}
+job_configured() { [ -f "$JOB" ] && cmp -s "$JOB" "$EXPECTED_JOB"; }
+job_running() { status kwg 2>/dev/null | grep -q '^kwg start/'; }
+handshake_age() {
+    printf '%s\n' "$1" | awk '
+    { d=$0; sub(/ ago$/, "", d); total=0; count=0;
+      if (d=="never" || d=="" || d ~ /^-/) { print "null"; next }
+      while (match(d, /^[0-9]+[hms]/)) {
+          part=substr(d, RSTART, RLENGTH); unit=substr(part,length(part),1);
+          value=part+0; total+=value*(unit=="h"?3600:(unit=="m"?60:1));
+          d=substr(d, RLENGTH+1); count++;
+      }
+      if (d=="" && count>0) printf "%.0f\n",total; else print "null";
+    }'
+}
+show_status() {
+    observed=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    boot=$(read_token /proc/sys/kernel/random/boot_id 'a-f0-9-')
+    baseline=$(read_token "$STATE/setup-boot-id" 'a-f0-9-')
+    service_boot=$(read_token "$STATE/service-boot-id" 'a-f0-9-')
+    origin=$(read_token "$STATE/service-origin" 'a-z_')
+    service_phase=$(read_token "$STATE/service-phase" 'a-z_')
+    [ -n "$origin" ] || origin=not_started
+    [ -n "$service_phase" ] || service_phase=unknown
+    configured=false; job_configured && configured=true
+    auto_requested=false; [ ! -f "$AUTO" ] || auto_requested=true
+    auto=false; [ "$configured:$auto_requested" != true:true ] || auto=true
+    job_output=$(status kwg 2>/dev/null || :)
+    service=stopped
+    case "$job_output" in
+        'kwg start/running'*) service=running ;;
+        'kwg start/'*) service=starting ;;
+        *) [ "$configured" = true ] || service=not_installed ;;
+    esac
+    network=false
+    if ip route 2>/dev/null | grep -q '^default '; then network=true; fi
+    tun=false
+    if [ -c /dev/net/tun ] && grep -Eq '(^|[[:space:]])tun$' /proc/misc; then tun=true; fi
+    trusted=false
+    native=
+    if native_trusted; then trusted=true; native=$("$BIN" status 2>/dev/null || :); fi
+    tunnel=$(printf '%s\n' "$native" | awk '/^state: / {print $2; exit}')
+    [ "$tunnel" = up ] || tunnel=down
+    address=$(printf '%s\n' "$native" | awk '/^address: / {print $2; exit}' | tr -cd '0-9a-fA-F:./, ')
+    handshake=$(printf '%s\n' "$native" | awk '/^handshake: / {sub(/^handshake: /, ""); print; exit}' | tr -cd '0-9a-z .-')
+    received=$(printf '%s\n' "$native" | awk '/^received: / {sub(/^received: /, ""); print; exit}' | tr -cd '0-9a-zA-Z .')
+    sent=$(printf '%s\n' "$native" | awk '/^sent: / {sub(/^sent: /, ""); print; exit}' | tr -cd '0-9a-zA-Z .')
+    [ -n "$handshake" ] || handshake=none
+    age=$(handshake_age "$handshake")
+    connection=OFF
+    if [ "$trusted" != true ]; then
+        connection=PAYLOAD_ERROR
+    elif [ "$tunnel" = up ] && { [ "$service_phase" = unmanaged_tunnel ] || { [ "$service" != running ] && [ "$service" != starting ]; }; }; then
+        connection=UP_UNMANAGED
+    elif [ "$service" = running ] || [ "$service" = starting ]; then
+        if [ "$network" != true ]; then connection=WAITING_FOR_NETWORK
+        elif [ "$tunnel" = up ]; then
+            if [ "$age" = null ]; then connection=WAITING_FOR_HANDSHAKE
+            elif [ "$age" -le 240 ]; then connection=CONNECTED
+            else connection=STALE_HANDSHAKE; fi
+        elif [ "$service_phase" = tun_guard_paused ]; then connection=TUN_RECOVERY_REQUIRED
+        elif [ -e "$STATE/tun-load-pending" ]; then connection=LOADING_TUN
+        elif [ "$service_phase" = config_error ]; then connection=CONFIG_ERROR
+        elif [ "$service_phase" = tun_setup_failed ]; then connection=TUN_SETUP_FAILED
+        else connection=STARTING; fi
+    fi
+    reboot_verified=false
+    if [ -n "$baseline" ] && [ -n "$boot" ] && [ "$boot" != "$baseline" ] &&
+       [ "$service_boot" = "$boot" ] && [ "$origin" = framework_ready ] && [ "$service" = running ]; then
+        reboot_verified=true
+    fi
+    printf '{"schema":1,"observedAt":"%s","bootId":"%s","setupBootId":"%s","serviceBootId":"%s","serviceOrigin":"%s","servicePhase":"%s","jobConfigured":%s,"autostartRequested":%s,"autostartEnabled":%s,"serviceState":"%s","networkReady":%s,"binaryTrusted":%s,"tunReady":%s,"tunnelState":"%s","connectionState":"%s","vpnAddress":"%s","lastHandshake":"%s","handshakeAgeSeconds":%s,"received":"%s","sent":"%s","rebootAutostartVerified":%s}\n' \
+        "$observed" "$boot" "$baseline" "$service_boot" "$origin" "$service_phase" "$configured" "$auto_requested" "$auto" "$service" "$network" "$trusted" "$tun" "$tunnel" "$connection" "$address" "$handshake" "$age" "$received" "$sent" "$reboot_verified" > "$STATE/status.json.tmp.$$"
+    mv "$STATE/status.json.tmp.$$" "$STATE/status.json"
+    if [ "$reboot_verified" = true ] && [ "$connection" = CONNECTED ] && [ "$tun" = true ]; then
+        cp "$STATE/status.json" "$STATE/boot-verification.json"
+    fi
+    auto_text=OFF; [ "$auto" != true ] || auto_text=ON
+    if [ "$auto_requested" = true ] && [ "$configured" != true ]; then auto_text='REQUESTED, JOB MISSING/MISMATCHED'; fi
+    network_text=WAITING; [ "$network" != true ] || network_text=READY
+    tun_text=NOT_LOADED; [ "$tun" != true ] || tun_text=READY
+    boot_text=PENDING; [ "$reboot_verified" != true ] || boot_text=VERIFIED
+    {
+        printf 'WireGuard status (%s UTC)\n' "$(date -u '+%H:%M:%S')"
+        printf 'VPN: %s\nAutostart: %s\nService: %s\n' "$connection" "$auto_text" "$service"
+        printf 'Network: %s\nTUN driver: %s\n' "$network_text" "$tun_text"
+        printf 'VPN IP: %s\nHandshake: %s\n' "${address:---}" "$handshake"
+        printf 'Traffic RX / TX: %s / %s\n' "${received:-0}" "${sent:-0}"
+        printf 'Last service start: %s\nReboot check: %s\n' "$origin" "$boot_text"
+        if [ "$connection" = TUN_RECOVERY_REQUIRED ]; then printf 'Run WireGuard TUN Test, then retry Start.\n'; fi
+    } > "$STATE/status.txt.tmp.$$"
+    mv "$STATE/status.txt.tmp.$$" "$STATE/status.txt"
+    while IFS= read -r line; do printf '%s\n' "$line"; done < "$STATE/status.txt"
+    # Never write into an unmounted USB mountpoint or copy private configuration.
+    if [ -d "$PUBLIC" ] && awk '$2=="/mnt/us" {found=1} END {exit !found}' /proc/mounts; then
+        mkdir -p "$PUBLIC/state"
+        for file in status.json status.txt service-start.json boot-verification.json control-error.txt control.log control-payload-check.log; do
+            [ ! -f "$STATE/$file" ] || cp "$STATE/$file" "$PUBLIC/state/$file"
+        done
+        [ -f "$STATE/control-error.txt" ] || rm -f "$PUBLIC/state/control-error.txt"
+        sync
+        printf 'Status snapshot saved.\n'
+    fi
+}
+validate_config() {
+    native_trusted || fail 'WireGuard binary checksum mismatch; not executing it.'
+    [ -f "$CONF" ] || fail 'Client config is missing; do not reinstall blindly.'
+    "$BIN" check "$CONF" > "$STATE/control-config-check.log" 2>&1 || fail 'Client config is invalid; see control-config-check.log.'
+}
+wait_for_start() {
+    n=0
+    while [ "$n" -lt 10 ]; do
+        ip route 2>/dev/null | grep -q '^default ' || break
+        output=$("$BIN" status 2>/dev/null || :)
+        if printf '%s\n' "$output" | grep -q '^handshake: ' &&
+           ! printf '%s\n' "$output" | grep -q '^handshake: never$'; then break; fi
+        current_phase=$(read_token "$STATE/service-phase" 'a-z_')
+        case "$current_phase" in tun_guard_paused|tun_setup_failed|config_error) break ;; esac
+        job_running || break
+        sleep 2
+        n=$((n + 1))
+    done
+}
+start_service() {
+    job_configured || fail 'Service is not installed or differs from the expected job. Run AutoStart On.'
+    validate_config
+    if job_running; then
+        printf 'Service already running; no duplicate started.\n'
+    else
+        [ ! -d /sys/class/net/wg0 ] || fail 'An unmanaged wg0 already exists; not starting a duplicate.'
+        printf 'Starting WireGuard; waiting briefly for network/handshake...\n'
+        start kwg >> "$LOG" 2>&1 || fail 'Upstart could not start kwg; see control.log.'
+        log 'manual start requested'
+    fi
+    wait_for_start
+}
+enable_autostart() {
+    [ "$(uname -r)" = 3.0.35-lab126 ] && [ "$(uname -m)" = armv7l ] || fail 'Unexpected device/kernel; setup refused.'
+    version=$(sha256sum /proc/version)
+    [ "${version%% *}" = @@KERNEL_VERSION_SHA256@@ ] || fail 'Kernel build changed; setup refused.'
+    (cd /mnt/us && sha256sum -c "$PUBLIC/payload.sha256") > "$STATE/control-payload-check.log" 2>&1 || fail 'Payload verification failed.'
+    validate_config
+    [ -d /etc/upstart ] || fail 'Upstart job directory is unavailable.'
+    if [ -e "$JOB" ] && ! job_configured; then fail 'Existing kwg job differs; preserved without overwriting.'; fi
+    if [ ! -e "$JOB" ]; then
+        root_options=$(awk '$2=="/" {options=$4} END {print options}' /proc/mounts)
+        case ",$root_options," in
+            *,ro,*) RESTORE_RO=true; mntroot rw >> "$LOG" 2>&1 || fail 'Could not temporarily make root writable.' ;;
+            *,rw,*) ;;
+            *) fail 'Cannot determine root mount mode.' ;;
+        esac
+        temporary="/etc/upstart/.kwg-new.$$"
+        cp "$EXPECTED_JOB" "$temporary" && chmod 644 "$temporary" || fail 'Could not write the service job.'
+        mv "$temporary" "$JOB" || fail 'Could not install the service job.'
+        job_configured || fail 'Installed job verification failed.'
+        if [ "$RESTORE_RO" = true ]; then
+            mntroot ro >> "$LOG" 2>&1 || fail 'Could not restore root read-only.'
+            RESTORE_RO=false
+        fi
+        if command -v initctl >/dev/null 2>&1; then initctl reload-configuration >> "$LOG" 2>&1 || :; fi
+        sleep 1
+    fi
+    [ ! -L "$AUTO" ] || fail 'Unexpected symlink at autostart flag; preserved.'
+    if [ ! -f "$AUTO" ] || [ ! -f "$STATE/setup-boot-id" ]; then
+        tr -cd 'a-f0-9-' < /proc/sys/kernel/random/boot_id > "$STATE/setup-boot-id"
+        printf '\n' >> "$STATE/setup-boot-id"
+    fi
+    : > "$AUTO"
+    chmod 600 "$AUTO" || fail 'Cannot secure autostart flag.'
+    log 'boot autostart enabled'
+    sync
+    printf 'Autostart ON: connect after boot when networking is available.\n'
+    start_service
+}
+
+case "${1:-status}" in
+    status) show_status ;;
+    start) lock; start_service; show_status ;;
+    stop)
+        lock
+        if job_running; then stop kwg >> "$LOG" 2>&1 || fail 'Upstart stop failed; see control.log.'; fi
+        if native_trusted; then
+            remaining=$("$BIN" status 2>/dev/null || :)
+            if printf '%s\n' "$remaining" | grep -q '^state: up$'; then
+                fail 'A tunnel is still up; no unmanaged process was killed.'
+            fi
+        fi
+        log 'manual stop requested; boot setting unchanged'
+        printf 'Managed service stopped. The autostart setting is unchanged.\n'
+        show_status
+        ;;
+    enable-autostart) lock; enable_autostart; show_status ;;
+    disable-autostart)
+        lock
+        [ ! -d "$AUTO" ] || fail 'Autostart path is a directory; preserved.'
+        rm -f "$AUTO" || fail 'Could not disable autostart.'
+        log 'boot autostart disabled; current tunnel unchanged'
+        printf 'Autostart OFF. The current tunnel is unchanged; use Stop to disconnect.\n'
+        show_status
+        ;;
+    *) printf 'usage: control.sh status|start|stop|enable-autostart|disable-autostart\n'; exit 2 ;;
+esac
